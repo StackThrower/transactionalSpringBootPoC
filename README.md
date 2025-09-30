@@ -42,30 +42,39 @@ On startup, two accounts are created:
 
 `failMidway=true` simulates an exception between debit and credit to show rollback behavior.
 
-## Quick try (curl)
+## Isolation level demos
+
+New endpoints to demonstrate isolation anomalies (non-repeatable and phantom reads) at different isolation levels using programmatic JDBC transactions:
+
+- GET /api/isolation/non-repeatable?owner=alice&delta=5.00&level=READ_COMMITTED
+  - Reads balance twice within one transaction while another transaction updates between reads.
+  - Response fields: isolation, firstRead, secondRead, anomaly (true if values differ).
+- GET /api/isolation/phantom?threshold=50.00&level=READ_COMMITTED
+  - Counts rows with balance >= threshold twice; another transaction inserts a new qualifying row between queries.
+  - Response fields: isolation, firstCount, secondCount, anomaly (true if counts differ).
+
+Supported levels: READ_UNCOMMITTED, READ_COMMITTED, REPEATABLE_READ, SERIALIZABLE.
+
+Notes:
+- Expected behavior (typical on many databases):
+  - Non-repeatable reads: allowed at READ_UNCOMMITTED and READ_COMMITTED; prevented at REPEATABLE_READ and SERIALIZABLE.
+  - Phantom reads: allowed at READ_UNCOMMITTED and READ_COMMITTED; often prevented only at SERIALIZABLE (REPEATABLE_READ behavior is DB-specific).
+- H2’s behavior may differ slightly compared to Postgres/MySQL due to its MVCC implementation; use this as an educational demo.
+
+### Quick try (curl)
 
 ```bash
-# Check initial balances
-curl -s localhost:8080/api/accounts/alice/balance | jq
-curl -s localhost:8080/api/accounts/bob/balance | jq
+# Non-repeatable read demo
+curl -s "localhost:8080/api/isolation/non-repeatable?owner=alice&delta=5.00&level=READ_COMMITTED" | jq
+curl -s "localhost:8080/api/isolation/non-repeatable?owner=alice&delta=5.00&level=REPEATABLE_READ" | jq
+curl -s "localhost:8080/api/isolation/non-repeatable?owner=alice&delta=5.00&level=SERIALIZABLE" | jq
 
-# JPA @Transactional transfer and rollback
-curl -s -X POST "localhost:8080/api/transfer/jpa?from=alice&to=bob&amount=10.00&failMidway=false" | jq
-curl -s -X POST "localhost:8080/api/transfer/jpa?from=alice&to=bob&amount=10.00&failMidway=true" | jq
-
-# JDBC programmatic TX manager
-curl -s -X POST "localhost:8080/api/transfer/jdbc-txmgr?from=alice&to=bob&amount=10.00&failMidway=false" | jq
-curl -s -X POST "localhost:8080/api/transfer/jdbc-txmgr?from=alice&to=bob&amount=10.00&failMidway=true" | jq
-
-# JDBC manual connection
-curl -s -X POST "localhost:8080/api/transfer/jdbc-manual?from=alice&to=bob&amount=10.00&failMidway=false" | jq
-curl -s -X POST "localhost:8080/api/transfer/jdbc-manual?from=alice&to=bob&amount=10.00&failMidway=true" | jq
-
-# No transaction (shows partial update on failure)
-curl -s -X POST "localhost:8080/api/transfer/jdbc-no-tx?from=alice&to=bob&amount=10.00&failMidway=true" | jq
+# Phantom read demo
+curl -s "localhost:8080/api/isolation/phantom?threshold=50.00&level=READ_COMMITTED" | jq
+curl -s "localhost:8080/api/isolation/phantom?threshold=50.00&level=REPEATABLE_READ" | jq
+curl -s "localhost:8080/api/isolation/phantom?threshold=50.00&level=SERIALIZABLE" | jq
 ```
 
 ## Notes
 - The `TransactionConfig` defines a dedicated `DataSourceTransactionManager` bean for JDBC, qualified as `jdbcTxManager`, to avoid ambiguity with JPA's transaction manager.
 - Integration tests cover commit and rollback scenarios for each approach.
-
